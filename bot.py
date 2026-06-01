@@ -1,6 +1,8 @@
 import asyncio
 import logging
 from datetime import datetime
+import firebase_admin
+from firebase_admin import credentials, firestore
 from telegram import Bot
 from telegram.constants import ParseMode
 
@@ -11,130 +13,102 @@ TOKEN = "8959805650:AAEhkO-Cw17a0b88C3TdoV9a1CvvJR8nugA"
 CANAL = "@acheiali"
 
 # ============================================================
-# PRODUTOS COM LINKS DE AFILIADO
-# Adicione mais produtos nesta lista!
+# FIREBASE
 # ============================================================
-produtos = [
-    {
-        "emoji": "🎧",
-        "nome": "Lenovo GM2 Pro TWS Bluetooth — Noise Cancelling",
-        "preco_original": "R$ 105,19",
-        "preco_desconto": "R$ 47,59",
-        "desconto": "55%",
-        "avaliacao": "4.9",
-        "reviews": "67",
-        "vendidos": "700+",
-        "frete": True,
-        "link": "https://s.click.aliexpress.com/e/_c4DxN8G9",
-        "categoria": "Eletrônicos"
-    },
-    {
-        "emoji": "🕷️",
-        "nome": "Colar Aranha Prata Y2K — Huitan Spider Necklace",
-        "preco_original": "R$ 17,33",
-        "preco_desconto": "R$ 6,99",
-        "desconto": "60%",
-        "avaliacao": "4.7",
-        "reviews": "259",
-        "vendidos": "900+",
-        "frete": True,
-        "link": "https://s.click.aliexpress.com/e/_c421tJvF",
-        "categoria": "Moda"
-    },
-    {
-        "emoji": "🥊",
-        "nome": "Protetor Bucal Boxe — Sports Brace Mouthguard",
-        "preco_original": "R$ 10,61",
-        "preco_desconto": "R$ 6,99",
-        "desconto": "34%",
-        "avaliacao": "4.4",
-        "reviews": "563",
-        "vendidos": "5.000+",
-        "frete": True,
-        "link": "https://s.click.aliexpress.com/e/_c4UOCHlT",
-        "categoria": "Esportes"
-    },
-    {
-        "emoji": "⛓️",
-        "nome": "Colar Prata 925 Sterling — Lobster Clasp Necklace",
-        "preco_original": "R$ 8,94",
-        "preco_desconto": "R$ 6,99",
-        "desconto": "22%",
-        "avaliacao": "4.4",
-        "reviews": "1.186",
-        "vendidos": "10.000+",
-        "frete": True,
-        "link": "https://s.click.aliexpress.com/e/_c31l6SYV",
-        "categoria": "Moda"
-    },
-    {
-        "emoji": "📿",
-        "nome": "Corrente Grossa Hiphop Cuban Link — Stainless Steel",
-        "preco_original": "R$ 9,13",
-        "preco_desconto": "R$ 6,99",
-        "desconto": "23%",
-        "avaliacao": "4.5",
-        "reviews": "1.349",
-        "vendidos": "5.000+",
-        "frete": True,
-        "link": "https://s.click.aliexpress.com/e/_c4SW23GD",
-        "categoria": "Moda"
-    },
-]
+cred = credentials.Certificate("serviceAccount.json")
+firebase_admin.initialize_app(cred)
+db = firestore.client()
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s — %(message)s")
+logger = logging.getLogger(__name__)
 
 # ============================================================
-# HORÁRIOS DE POSTAGEM (24h)
-# Você pode adicionar ou remover horários!
+# BUSCAR PRODUTOS DO FIREBASE
 # ============================================================
-HORARIOS = ["09:00", "12:00", "18:00", "21:00"]
+def buscar_produtos():
+    docs = db.collection("produtos").stream()
+    produtos = []
+    for doc in docs:
+        produtos.append(doc.to_dict())
+    logger.info(f"🔄 {len(produtos)} produtos carregados do Firebase")
+    return produtos
 
 # ============================================================
-# TEMPLATES DE MENSAGEM
+# BUSCAR HORÁRIOS DO FIREBASE
 # ============================================================
+def buscar_horarios():
+    try:
+        doc = db.collection("config").document("horarios").get()
+        if doc.exists:
+            return doc.to_dict().get("lista", ["09:00","12:00","18:00","21:00"])
+    except Exception as e:
+        logger.error(f"Erro ao buscar horários: {e}")
+    return ["09:00","12:00","18:00","21:00"]
+
+# ============================================================
+# MONTAR MENSAGEM
+# ============================================================
+def escape(text):
+    chars = ['_','*','[',']','(',')','>','#','+','-','=','|','{','}','.','!','~','`']
+    for c in chars:
+        text = str(text).replace(c, f'\\{c}')
+    return text
+
 def montar_mensagem(produto, tipo="normal"):
-    frete = "🚚 *Frete grátis para o Brasil*" if produto["frete"] else "📦 Verificar frete no site"
+    emoji = produto.get("emoji", "🛍️")
+    nome = escape(produto.get("nome", "Produto"))
+    old = escape(produto.get("preco_original") or produto.get("old", ""))
+    price = escape(produto.get("preco_desconto") or produto.get("price", ""))
+    desconto = escape(produto.get("desconto", ""))
+    stars = escape(produto.get("avaliacao") or produto.get("stars", "4.5"))
+    reviews = escape(produto.get("reviews", "100+"))
+    link = produto.get("link", "https://www.aliexpress.com")
+    frete = produto.get("frete", True)
+    frete_txt = "🚚 *Frete grátis para o Brasil*" if frete else "📦 Verificar frete no site"
+    tipo_real = produto.get("tipo", tipo)
 
-    if tipo == "flash":
+    if tipo_real == "flash":
         return (
             f"⚡ *OFERTA RELÂMPAGO — Corre\\!*\n\n"
-            f"{produto['emoji']} *{produto['nome']}*\n\n"
-            f"🔴 ~~De: {produto['preco_original']}~~\n"
-            f"🟢 Por apenas: *{produto['preco_desconto']}*\n"
-            f"💥 *{produto['desconto']} DE DESCONTO\\!*\n\n"
-            f"{frete}\n"
-            f"⭐ {produto['avaliacao']} estrelas \\| {produto['reviews']} avaliações\n"
-            f"🏆 {produto['vendidos']} vendidos\n\n"
+            f"{emoji} *{nome}*\n\n"
+            f"🔴 ~~De: {old}~~\n"
+            f"🟢 Por apenas: *{price}*\n"
+            f"💥 *{desconto} DE DESCONTO\\!*\n\n"
+            f"{frete_txt}\n"
+            f"⭐ {stars} estrelas \\| {reviews} avaliações\n\n"
             f"⏳ *Oferta por tempo limitado\\!*\n\n"
-            f"🛒 [Garantir agora]({produto['link']})\n\n"
+            f"🛒 [Garantir agora]({link})\n\n"
             f"📲 _Encaminhe para quem vai querer\\!_"
         )
     else:
         return (
             f"🛍️ *ACHEI ALI — Oferta do Dia*\n\n"
-            f"{produto['emoji']} *{produto['nome']}*\n\n"
-            f"💰 ~~De: {produto['preco_original']}~~\n"
-            f"✅ Por: *{produto['preco_desconto']}*\n"
-            f"📉 Economia de *{produto['desconto']}*\n\n"
-            f"{frete}\n"
-            f"⭐ {produto['avaliacao']} estrelas \\| {produto['reviews']} avaliações\n\n"
-            f"👉 [Comprar agora]({produto['link']})\n\n"
+            f"{emoji} *{nome}*\n\n"
+            f"💰 ~~De: {old}~~\n"
+            f"✅ Por: *{price}*\n"
+            f"📉 Economia de *{desconto}*\n\n"
+            f"{frete_txt}\n"
+            f"⭐ {stars} estrelas \\| {reviews} avaliações\n\n"
+            f"👉 [Comprar agora]({link})\n\n"
             f"⚠️ _Preço pode mudar a qualquer momento\\!_"
         )
 
 # ============================================================
 # LÓGICA DO BOT
 # ============================================================
-logging.basicConfig(level=logging.INFO, format="%(asctime)s — %(message)s")
-logger = logging.getLogger(__name__)
-
 produto_index = 0
 
-async def postar_produto(bot, tipo="normal"):
+async def postar_produto(bot):
     global produto_index
+    produtos = buscar_produtos()
+    if not produtos:
+        logger.warning("⚠️ Nenhum produto encontrado no Firebase!")
+        return
+
     produto = produtos[produto_index % len(produtos)]
     produto_index += 1
 
-    mensagem = montar_mensagem(produto, tipo)
+    mensagem = montar_mensagem(produto)
 
     try:
         await bot.send_message(
@@ -143,24 +117,26 @@ async def postar_produto(bot, tipo="normal"):
             parse_mode=ParseMode.MARKDOWN_V2,
             disable_web_page_preview=False
         )
-        logger.info(f"✅ Postado: {produto['nome']}")
+        logger.info(f"✅ Postado: {produto.get('nome','?')}")
     except Exception as e:
         logger.error(f"❌ Erro ao postar: {e}")
 
 async def verificar_horario(bot):
     ultimo_postado = {}
-    logger.info("🤖 Bot AcheiAli iniciado! Aguardando horários...")
-    logger.info(f"📅 Horários configurados: {', '.join(HORARIOS)}")
+    horarios = buscar_horarios()
+    logger.info(f"🤖 Bot AcheiAli iniciado!")
+    logger.info(f"📅 Horários: {', '.join(horarios)}")
 
     while True:
-        agora = datetime.now().strftime("%H:%M")
+        # Recarrega horários a cada hora
+        if datetime.now().minute == 0:
+            horarios = buscar_horarios()
 
-        for horario in HORARIOS:
+        agora = datetime.now().strftime("%H:%M")
+        for horario in horarios:
             if agora == horario and ultimo_postado.get(horario) != datetime.now().date():
                 ultimo_postado[horario] = datetime.now().date()
-                # Hora do almoço e noite = flash sale
-                tipo = "flash" if horario in ["12:00", "21:00"] else "normal"
-                await postar_produto(bot, tipo)
+                await postar_produto(bot)
 
         await asyncio.sleep(30)
 
@@ -169,16 +145,14 @@ async def main():
     info = await bot.get_me()
     logger.info(f"🤖 Bot conectado: @{info.username}")
 
-    # Envia mensagem de teste ao iniciar
     try:
         await bot.send_message(
             chat_id=CANAL,
-            text="🟢 *Bot AcheiAli iniciado\\!*\n\nPostagens automáticas ativadas\\! 🚀",
+            text="🟢 *Bot AcheiAli iniciado\\!*\n\nAgora lendo produtos direto do Firebase 🔥",
             parse_mode=ParseMode.MARKDOWN_V2
         )
-        logger.info("✅ Mensagem de teste enviada!")
     except Exception as e:
-        logger.error(f"❌ Erro no teste: {e} — Verifique se o bot é admin do canal.")
+        logger.error(f"❌ Erro no teste: {e}")
 
     await verificar_horario(bot)
 
