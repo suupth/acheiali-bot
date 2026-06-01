@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import os
+import json
 from datetime import datetime
 import firebase_admin
 from firebase_admin import credentials, firestore
@@ -13,9 +15,14 @@ TOKEN = "8959805650:AAEhkO-Cw17a0b88C3TdoV9a1CvvJR8nugA"
 CANAL = "@acheiali"
 
 # ============================================================
-# FIREBASE
+# FIREBASE — lê das variáveis de ambiente
 # ============================================================
-cred = credentials.Certificate("serviceAccount.json")
+firebase_creds = os.environ.get("FIREBASE_CREDENTIALS")
+if firebase_creds:
+    cred_dict = json.loads(firebase_creds)
+    cred = credentials.Certificate(cred_dict)
+else:
+    cred = credentials.Certificate("serviceAccount.json")
 firebase_admin.initialize_app(cred)
 db = firestore.client()
 
